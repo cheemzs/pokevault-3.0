@@ -434,7 +434,7 @@ async function addCard() {
   if (!price || price <= 0) { toast('Please enter a valid purchase price.', 'error'); return; }
 
   const displayName = variant ? `${name} (${variant})` : name;
-  const id          = Date.now().toString();
+   const id = crypto.randomUUID();
 
   const { data, error } = await _sb.from('cards').insert([{
     id, user_id: _currentUserId, name: displayName, set_name: set||null,
@@ -814,15 +814,20 @@ function scoreImageResult(result, card) {
 
 async function fetchCardImageResults(card) {
   try {
-    const name   = sanitiseName(card.name);
-    const set    = sanitiseSet(card.set);
+    const name = card.name.replace(/\s*\(.*?\)\s*/g, '').trim();
     const params = new URLSearchParams({ action: 'search', name });
-    if (set) params.set('set', set);
-    const res  = await fetch('/api/pokeprice?' + params.toString());
-    if (!res.ok) return [];
-    const data = await res.json();
-    return (data.results||[]).filter(r => r.imageCdnUrl400||r.imageCdnUrl||r.imageCdnUrl200);
-  } catch (e) { console.warn('fetchCardImageResults error:', e); return []; }
+    const r = await fetch('/api/pokeprice?' + params);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      console.error('fetchCardImageResults HTTP error:', r.status, err);
+      return [];
+    }
+    const data = await r.json();
+    return (data.results || []).filter(r => r.imageCdnUrl400 || r.imageCdnUrl || r.imageCdnUrl200);
+  } catch (e) {
+    console.error('fetchCardImageResults fetch error:', e);
+    return [];
+  }
 }
 
 function switchModalTab(tab) {
