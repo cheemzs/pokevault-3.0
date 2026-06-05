@@ -1,5 +1,11 @@
+<<<<<<< HEAD
 .env
 .env.local
 node_modules/
 .vercel/
+=======
+node_modules/
+.env
+*.log
+>>>>>>> 3b4e5399c08423ef1b057b7dc97f98e16a073ea6
 .DS_Store
