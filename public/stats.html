@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PokeVault — Stats</title>
+  <link rel="icon" href="/pfp.jpeg" type="image/jpeg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+  <header class="site-header" id="site-header">
+    <div class="header-inner">
+      <a href="/" class="header-brand">
+        <div class="brand-logo">
+          <img src="/pfp.jpeg" alt="PokeVault Logo" class="brand-logo-img" />
+        </div>
+        <div>
+          <div class="brand-name">PokeVault</div>
+          <div class="brand-sub">Card Portfolio Tracker</div>
+        </div>
+      </a>
+      <nav class="header-nav">
+        <a href="/"      class="nav-link">Collection</a>
+        <a href="/stats" class="nav-link active">Stats</a>
+      </nav>
+      <div class="header-right">
+        <div class="header-controls">
+          <div class="theme-switcher">
+            <button class="theme-option" data-theme="dark"    onclick="setTheme('dark')"    title="Dark">🌑</button>
+            <button class="theme-option" data-theme="light"   onclick="setTheme('light')"   title="Light">☀️</button>
+            <button class="theme-option" data-theme="lucario" onclick="setTheme('lucario')" title="Lucario">⚔️</button>
+          </div>
+          <span class="header-username" id="username-display"></span>
+          <button class="logout-btn" onclick="logout()">Log out</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-content">
+    <div class="section-label" style="margin-bottom:24px;">Portfolio analytics</div>
+
+    <div class="summary-grid" style="margin-bottom:32px;">
+      <div class="metric-card">
+        <div class="metric-icon">🏦</div>
+        <div class="metric-body">
+          <div class="metric-label">Total realised</div>
+          <div class="metric-value" id="stat-realised">$0.00</div>
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon">📊</div>
+        <div class="metric-body">
+          <div class="metric-label">Unrealised P/L</div>
+          <div class="metric-value" id="stat-unrealised">$0.00</div>
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon">🥇</div>
+        <div class="metric-body">
+          <div class="metric-label">Best ROI card</div>
+          <div class="metric-value" id="stat-best-roi" style="font-size:14px;">—</div>
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon">💸</div>
+        <div class="metric-body">
+          <div class="metric-label">Worst ROI card</div>
+          <div class="metric-value" id="stat-worst-roi" style="font-size:14px;">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stats-card stats-card-wide">
+        <div class="stats-card-title">Portfolio value over time (SGD)</div>
+        <div style="height:220px; position:relative;">
+          <canvas id="chart-portfolio"></canvas>
+        </div>
+        <p class="modal-chart-empty" id="portfolio-empty" style="display:none;">Refresh prices a few times to build up history</p>
+      </div>
+
+      <div class="stats-card">
+        <div class="stats-card-title">Value by grade</div>
+        <div style="height:220px; position:relative;">
+          <canvas id="chart-grade"></canvas>
+        </div>
+      </div>
+
+      <div class="stats-card">
+        <div class="stats-card-title">↑ Top 5 by ROI</div>
+        <div id="best-performers" class="performers-list"></div>
+      </div>
+
+      <div class="stats-card">
+        <div class="stats-card-title">↓ Worst 5 by ROI</div>
+        <div id="worst-performers" class="performers-list"></div>
+      </div>
+
+      <div class="stats-card stats-card-wide">
+        <div class="stats-card-title">Realised gains — sold cards</div>
+        <div id="sold-breakdown" class="sold-breakdown-list"></div>
+        <p class="modal-chart-empty" id="sold-empty" style="display:none;">No sold cards yet</p>
+      </div>
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="/js/app.js"></script>
+  <script>
+    // Stats page initialiser — runs after app.js sets up Supabase
+    window.addEventListener('DOMContentLoaded', () => initStats());
+
+    async function initStats() {
+      const { data: { session } } = await _sb.auth.getSession();
+      if (!session) { window.location.href = '/login'; return; }
+      document.getElementById('username-display').textContent = session.user.email.split('@')[0];
+
+      const { data: cards, error } = await _sb
+        .from('cards').select('*')
+        .eq('user_id', session.user.id)
+        .order('created_at', { ascending: true });
+
+      if (error) { console.error(error); return; }
+      renderStats(cards.map(dbToClient));
+    }
+
+    async function logout() {
+      await _sb.auth.signOut();
+      window.location.href = '/login';
+    }
+
+    function esc(str) {
+      return String(str)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function renderStats(cards) {
+      const active = cards.filter(c => !c.sold);
+      const sold   = cards.filter(c =>  c.sold);
+
+      const realised   = sold.reduce((s, c) => s + (Number(c.soldPrice) - Number(c.purchasePrice)) * (c.quantity || 1), 0);
+      const unrealised = active.reduce((s, c) => {
+        if (c.currentValue == null) return s;
+        return s + (Number(c.currentValue) - Number(c.purchasePrice)) * (c.quantity || 1);
+      }, 0);
+
+      const realisedEl   = document.getElementById('stat-realised');
+      const unrealisedEl = document.getElementById('stat-unrealised');
+      realisedEl.textContent   = (realised   >= 0 ? '+' : '') + 'SGD $' + Math.abs(realised).toFixed(2);
+      realisedEl.className     = 'metric-value ' + (realised   >= 0 ? 'pos' : 'neg');
+      unrealisedEl.textContent = (unrealised >= 0 ? '+' : '') + 'SGD $' + Math.abs(unrealised).toFixed(2);
+      unrealisedEl.className   = 'metric-value ' + (unrealised >= 0 ? 'pos' : 'neg');
+
+      const withROI = active
+        .filter(c => c.currentValue != null && Number(c.purchasePrice) > 0)
+        .map(c => ({ ...c, roi: ((Number(c.currentValue) - Number(c.purchasePrice)) / Number(c.purchasePrice)) * 100 }))
+        .sort((a, b) => b.roi - a.roi);
+
+      if (withROI.length) {
+        const best  = withROI[0];
+        const worst = withROI[withROI.length - 1];
+        const bestEl  = document.getElementById('stat-best-roi');
+        const worstEl = document.getElementById('stat-worst-roi');
+        bestEl.textContent  = best.name  + ' (' + best.roi.toFixed(1)  + '%)';
+        bestEl.className    = 'metric-value pos';
+        worstEl.textContent = worst.name + ' (' + worst.roi.toFixed(1) + '%)';
+        worstEl.className   = 'metric-value neg';
+      }
+
+      buildPortfolioChart(active);
+      buildGradeChart(active);
+      buildPerformers(withROI);
+      buildSoldBreakdown(sold);
+    }
+
+    function buildPortfolioChart(cards) {
+      const allDates = {};
+      cards.forEach(c => {
+        (c.priceHistory || []).forEach(p => {
+          const day = new Date(p.date).toLocaleDateString('en-SG');
+          allDates[day] = (allDates[day] || 0) + p.value * (c.quantity || 1);
+        });
+      });
+      const labels = Object.keys(allDates).sort((a, b) => new Date(a) - new Date(b));
+      const values = labels.map(l => allDates[l]);
+
+      if (labels.length < 2) { document.getElementById('portfolio-empty').style.display = 'block'; return; }
+
+      const ctx = document.getElementById('chart-portfolio').getContext('2d');
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            data: values, borderColor: 'var(--accent)', backgroundColor: 'var(--accent-glow)',
+            borderWidth: 2, pointRadius: 3, pointBackgroundColor: 'var(--accent)', tension: 0.4, fill: true,
+          }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => 'SGD $' + Number(ctx.raw).toFixed(2) } } },
+          scales: {
+            y: { ticks: { callback: v => '$' + v, font: { size: 11, family: 'DM Mono' }, color: 'var(--text3)' }, grid: { color: 'var(--border)' }, border: { display: false } },
+            x: { ticks: { font: { size: 11, family: 'DM Mono' }, color: 'var(--text3)' }, grid: { display: false }, border: { display: false } },
+          },
+        },
+      });
+    }
+
+    function buildGradeChart(cards) {
+      const grades = {};
+      cards.forEach(c => {
+        const g   = c.grade || 'raw';
+        const val = (c.currentValue != null ? Number(c.currentValue) : Number(c.purchasePrice)) * (c.quantity || 1);
+        grades[g] = (grades[g] || 0) + val;
+      });
+      const labels = Object.keys(grades);
+      const values = labels.map(l => grades[l]);
+      const colors = ['#7b9fd4','#4a90d9','#4caf50','#dc50a0','#ff6432','#ffc800','#503c78','#788ca0'];
+      const ctx = document.getElementById('chart-grade').getContext('2d');
+      new Chart(ctx, {
+        type: 'doughnut',
+        data: { labels, datasets: [{ data: values, backgroundColor: colors.slice(0, labels.length), borderWidth: 0 }] },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { position: 'right', labels: { font: { size: 11, family: 'DM Mono' }, color: 'var(--text2)', boxWidth: 12 } },
+            tooltip: { callbacks: { label: ctx => ctx.label + ': SGD $' + Number(ctx.raw).toFixed(2) } },
+          },
+        },
+      });
+    }
+
+    function buildPerformers(withROI) {
+      const top5    = withROI.slice(0, 5);
+      const bottom5 = withROI.slice(-5).reverse();
+      const row = c => {
+        const pos = c.roi >= 0;
+        return '<div class="performer-row">' +
+          `<div class="performer-name">${esc(c.name)}<span class="performer-set">${esc(c.set||'—')}</span></div>` +
+          `<div class="performer-roi ${pos ? 'profit-pos' : 'profit-neg'}">${pos?'+':''}${c.roi.toFixed(1)}%</div>` +
+          '</div>';
+      };
+      const noData = '<p style="color:var(--text3); font-size:12px; font-family:var(--font-mono); padding:16px 0;">Not enough data yet</p>';
+      document.getElementById('best-performers').innerHTML  = top5.length    ? top5.map(row).join('')    : noData;
+      document.getElementById('worst-performers').innerHTML = bottom5.length ? bottom5.map(row).join('') : noData;
+    }
+
+    function buildSoldBreakdown(sold) {
+      if (!sold.length) { document.getElementById('sold-empty').style.display = 'block'; return; }
+      document.getElementById('sold-breakdown').innerHTML = sold.map(c => {
+        const profit = (Number(c.soldPrice) - Number(c.purchasePrice)) * (c.quantity || 1);
+        const pos    = profit >= 0;
+        return '<div class="sold-breakdown-row">' +
+          '<div>' +
+            `<div class="performer-name">${esc(c.name)}<span class="performer-set">${esc(c.set||'—')}</span></div>` +
+            `<div style="font-size:11px; color:var(--text3); font-family:var(--font-mono); margin-top:2px;">${c.soldDate||'—'}${c.soldTo ? ' · ' + esc(c.soldTo) : ''}</div>` +
+          '</div>' +
+          '<div style="text-align:right;">' +
+            `<div style="font-family:var(--font-mono); font-size:13px;">SGD $${Number(c.soldPrice).toFixed(2)}</div>` +
+            `<div class="performer-roi ${pos ? 'profit-pos' : 'profit-neg'}">${pos?'+':''}SGD $${profit.toFixed(2)}</div>` +
+          '</div>' +
+          '</div>';
+      }).join('');
+    }
+  </script>
+</body>
+</html>
