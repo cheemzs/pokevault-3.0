@@ -391,8 +391,38 @@
       </div>
 
       <!-- Add card form -->
-      <div class="form-card" id="add-form">
-        <div class="form-title">Add new card</div>
+  <div class="form-title">Add new card</div>
+
+        <!-- Quick search -->
+        <div style="margin-bottom:18px;">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+            <div style="flex:1;position:relative;">
+              <input type="text" id="f-quicksearch"
+                placeholder="Search card name, number (199/165), or add JP for Japanese…"
+                style="width:100%;box-sizing:border-box;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:10px 14px;color:var(--text);font-family:var(--font-mono);font-size:13px;outline:none;"
+                oninput="qsDebounce()" onkeydown="if(event.key==='Enter'){event.preventDefault();qsSearch();}"
+                autocomplete="off" />
+            </div>
+            <div style="display:flex;gap:6px;">
+              <button onclick="qsSearch()" id="qs-btn"
+                style="background:var(--accent);color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;">
+                Search
+              </button>
+              <button onclick="qsSealedSearch()" id="qs-sealed-btn"
+                style="background:var(--bg3);color:var(--text2);border:1px solid var(--border2);border-radius:8px;padding:10px 14px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;" title="Search sealed products">
+                📦 Sealed
+              </button>
+            </div>
+          </div>
+          <div id="qs-results" style="display:none;background:var(--bg3);border:1px solid var(--border2);border-radius:10px;max-height:320px;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.35);"></div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;color:var(--text3);font-size:11px;font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;">
+          <span style="flex:1;height:1px;background:var(--border);display:block;"></span>
+          Card details
+          <span style="flex:1;height:1px;background:var(--border);display:block;"></span>
+        </div>
+
         <div class="form-grid">
           <div class="form-group">
             <label>Card name</label>
