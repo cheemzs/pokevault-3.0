@@ -243,20 +243,234 @@ function confirmDialog(message) {
   });
 }
 
-// ── Tab navigation ────────────────────────────────────────────────────────
-function switchTab(tab) {
-  activeCollectionTab = tab;
-  document.getElementById('tab-active').classList.toggle('active', tab === 'active');
-  document.getElementById('tab-sold').classList.toggle('active',   tab === 'sold');
-  document.getElementById('panel-active').style.display = tab === 'active' ? 'block' : 'none';
-  document.getElementById('panel-sold').style.display   = tab === 'sold'   ? 'block' : 'none';
+// ═══════════════════════════════════════════════════════════════════════════
+//  QUICK SEARCH (add form)
+//  Supports:
+//    "charizard"              → english card search
+//    "charizard JP"           → japanese card search
+//    "199/165"                → card number lookup (shows picker if >1 result)
+//    "199/165 JP"             → japanese card number lookup
+//    📦 Sealed button         → sealed product search
+// ═══════════════════════════════════════════════════════════════════════════
+
+let _qsDebounceTimer = null;
+let _qsLastResults   = [];
+
+function qsDebounce() {
+  clearTimeout(_qsDebounceTimer);
+  _qsDebounceTimer = setTimeout(qsSearch, 480);
 }
 
-function toggleForm() {
-  const f = document.getElementById('add-form');
-  f.classList.toggle('open');
-  if (f.classList.contains('open')) document.getElementById('f-name').focus();
+// Detect if input is a card number like "199/165" or "086"
+function _isCardNumber(q) {
+  return /^\d+\/\d+$/.test(q.trim()) || /^\d{3}$/.test(q.trim());
 }
+
+// Strip trailing JP/JP. flag and return { query, lang }
+function _parseQsInput(raw) {
+  const jpFlag = /\s+JP\.?$/i;
+  const isJP   = jpFlag.test(raw);
+  return { query: raw.replace(jpFlag, '').trim(), lang: isJP ? 'japanese' : 'english' };
+}
+
+function qsSetLoading(text) {
+  const box = document.getElementById('qs-results');
+  box.style.display = 'block';
+  box.innerHTML = `<div style="padding:18px;text-align:center;color:var(--text3);font-size:13px;font-family:var(--font-mono);">${text}</div>`;
+}
+
+function qsHide() {
+  const box = document.getElementById('qs-results');
+  box.style.display = 'none';
+  box.innerHTML     = '';
+  _qsLastResults    = [];
+}
+
+async function qsSearch() {
+  clearTimeout(_qsDebounceTimer);
+  const raw = (document.getElementById('f-quicksearch').value || '').trim();
+  if (!raw) { qsHide(); return; }
+
+  const { query, lang } = _parseQsInput(raw);
+  if (!query) { qsHide(); return; }
+
+  qsSetLoading('Searching…');
+
+  try {
+    let results;
+
+    if (_isCardNumber(query)) {
+      // Number lookup — use bynumber action
+      const p = new URLSearchParams({ action: 'bynumber', name: query, language: lang });
+      const r = await fetch('/api/pokeprice?' + p);
+      const d = await r.json();
+      results = d.results || [];
+    } else {
+      // Name search — handles multi-word, promo, ex, vmax etc naturally
+      const p = new URLSearchParams({ action: 'search', name: query, language: lang });
+      const r = await fetch('/api/pokeprice?' + p);
+      const d = await r.json();
+      results = d.results || [];
+    }
+
+    _qsLastResults = results;
+    _qsRenderResults(results, lang, false);
+
+  } catch (e) {
+    console.error('qsSearch error:', e);
+    qsSetLoading('Search failed — check connection');
+  }
+}
+
+async function qsSealedSearch() {
+  const raw = (document.getElementById('f-quicksearch').value || '').trim();
+  const { query, lang } = _parseQsInput(raw);
+
+  qsSetLoading('Searching sealed products…');
+
+  try {
+    const p = new URLSearchParams({ action: 'sealed', language: lang });
+    if (query) p.set('name', query);
+    const r = await fetch('/api/pokeprice?' + p);
+    const d = await r.json();
+    _qsLastResults = d.results || [];
+    _qsRenderResults(_qsLastResults, lang, true);
+  } catch (e) {
+    console.error('qsSealedSearch error:', e);
+    qsSetLoading('Search failed — check connection');
+  }
+}
+
+function _qsRenderResults(results, lang, isSealed) {
+  const box = document.getElementById('qs-results');
+  if (!results.length) {
+    box.style.display = 'block';
+    box.innerHTML = `<div style="padding:18px;text-align:center;color:var(--text3);font-size:13px;font-family:var(--font-mono);">No results found</div>`;
+    return;
+  }
+
+  // If number lookup returned >1 result, show full picker modal
+  const raw       = (document.getElementById('f-quicksearch').value || '').trim();
+  const { query } = _parseQsInput(raw);
+  if (_isCardNumber(query) && results.length > 1) {
+    box.style.display = 'none';
+    _qsOpenPicker(results, isSealed);
+    return;
+  }
+
+  box.style.display = 'block';
+  box.innerHTML = results.map((r, i) => {
+    const thumb    = r.imageCdnUrl200 || r.imageCdnUrl400 || r.imageCdnUrl || '';
+    const priceUSD = isSealed ? r.unopenedPrice : (r.prices?.market ?? null);
+    const priceTxt = priceUSD != null ? `SGD $${(priceUSD * USD_TO_SGD).toFixed(2)}` : '';
+    const sub      = isSealed
+      ? esc(r.setName || '—')
+      : `${esc(r.setName || '—')}${r.cardNumber ? ' · #' + esc(r.cardNumber) : ''}${r.rarity ? ' · ' + esc(r.rarity) : ''}${lang === 'japanese' ? ' · 🇯🇵 JP' : ''}`;
+    const imgEl = thumb
+      ? `<img src="${esc(thumb)}" style="width:34px;height:48px;object-fit:contain;border-radius:3px;flex-shrink:0;" />`
+      : `<span style="width:34px;height:48px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">${isSealed ? '📦' : '🃏'}</span>`;
+
+    return `<div onclick="_qsSelect(${i},${isSealed})"
+      style="display:flex;align-items:center;gap:12px;padding:9px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .12s;"
+      onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background=''">
+      ${imgEl}
+      <div style="flex:1;min-width:0;">
+        <div style="font-weight:600;font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(r.name)}</div>
+        <div style="font-size:11px;color:var(--text3);font-family:var(--font-mono);margin-top:2px;">${sub}</div>
+      </div>
+      <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);white-space:nowrap;">${esc(priceTxt)}</div>
+    </div>`;
+  }).join('');
+}
+
+// Full-screen picker for number collisions (multiple cards same number)
+function _qsOpenPicker(results, isSealed) {
+  const grid = document.getElementById('picker-grid');
+  document.getElementById('picker-title').textContent = 'Multiple cards found — pick the right one';
+  document.getElementById('picker-overlay').classList.add('active');
+
+  grid.innerHTML = results.map((r, i) => {
+    const thumb    = r.imageCdnUrl200 || r.imageCdnUrl400 || r.imageCdnUrl || '';
+    const priceUSD = isSealed ? r.unopenedPrice : (r.prices?.market ?? null);
+    const priceTxt = priceUSD != null ? `SGD $${(priceUSD * USD_TO_SGD).toFixed(2)}` : '—';
+    const imgEl = thumb
+      ? `<img src="${esc(thumb)}" alt="${esc(r.name)}" loading="lazy" style="width:100%;border-radius:6px;" />`
+      : `<div style="width:100%;aspect-ratio:2/3;background:var(--bg2);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:32px;">${isSealed ? '📦' : '🃏'}</div>`;
+
+    return `<div class="picker-item" onclick="_qsPickerSelect(${i},${isSealed})">
+      <div class="picker-img-wrap">${imgEl}</div>
+      <div class="picker-info">
+        <div class="picker-name">${esc(r.name)}</div>
+        <div class="picker-set">${esc(r.setName || '—')}</div>
+        <div class="picker-num">#${esc(r.cardNumber || r.tcgPlayerId || '?')} · ${esc(priceTxt)}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // store on grid for picker callback
+  grid._qsResults  = results;
+  grid._qsIsSealed = isSealed;
+}
+
+function _qsPickerSelect(index, isSealed) {
+  document.getElementById('picker-overlay').classList.remove('active');
+  const grid    = document.getElementById('picker-grid');
+  const results = grid._qsResults || [];
+  _qsApply(results[index], isSealed);
+}
+
+function _qsSelect(index, isSealed) {
+  qsHide();
+  _qsApply(_qsLastResults[index], isSealed);
+}
+
+function _qsApply(r, isSealed) {
+  if (!r) return;
+
+  const typeMap = {
+    fire:'Fire', water:'Water', grass:'Grass', lightning:'Electric', electric:'Electric',
+    psychic:'Psychic', fighting:'Fighting', darkness:'Dark', dark:'Dark',
+    metal:'Steel', steel:'Steel', dragon:'Dragon', fairy:'Fairy',
+    normal:'Normal', colorless:'Colorless',
+  };
+
+  if (isSealed) {
+    // Sealed product — fill name+set, no type
+    document.getElementById('f-name').value  = r.name    || '';
+    document.getElementById('f-set').value   = r.setName || '';
+    document.getElementById('f-type').value  = '';
+    document.getElementById('f-grade').value = 'raw';
+    const priceInput = document.getElementById('f-price');
+    if (!priceInput.value && r.unopenedPrice != null) {
+      priceInput.value = (r.unopenedPrice * USD_TO_SGD).toFixed(2);
+    }
+  } else {
+    // Single card
+    document.getElementById('f-name').value = r.name    || '';
+    document.getElementById('f-set').value  = r.setName || '';
+
+    // Auto-detect type
+    const rawType = (r.pokemonType || '').toLowerCase();
+    // pokemonType can be multi e.g. "Fire" or from energyType array
+    const firstType = Array.isArray(r.energyType) ? (r.energyType[0] || '').toLowerCase() : rawType;
+    const mapped = typeMap[rawType] || typeMap[firstType] || '';
+    if (mapped) document.getElementById('f-type').value = mapped;
+
+    // Pre-fill purchase price if blank
+    const priceInput = document.getElementById('f-price');
+    if (!priceInput.value && r.prices?.market != null) {
+      priceInput.value = (r.prices.market * USD_TO_SGD).toFixed(2);
+    }
+  }
+
+  document.getElementById('f-quicksearch').value = '';
+  document.getElementById('f-price').focus();
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', e => {
+  if (!e.target.closest('#add-form')) qsHide();
+});
 
 // ── Set filter ────────────────────────────────────────────────────────────
 function populateSetFilter() {
