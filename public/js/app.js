@@ -207,8 +207,10 @@ function confirmDialog(message) {
 //  📦 Sealed button  → sealed product search
 // ═══════════════════════════════════════════════════════════════════════════
 
-let _qsDebounceTimer = null;
-let _qsLastResults   = [];
+let _qsDebounceTimer  = null;
+let _qsLastResults    = [];
+let _qsLastLang       = 'english';  // tracks language of last search
+let _qsSelectedResult = null;       // stores full API result chosen from dropdown
 
 const QS_TYPE_MAP = {
   fire:'Fire', water:'Water', grass:'Grass', lightning:'Electric', electric:'Electric',
@@ -252,6 +254,7 @@ async function qsSearch() {
   if (!raw) { qsHide(); return; }
   const { query, lang } = _parseQsInput(raw);
   if (!query) { qsHide(); return; }
+  _qsLastLang = lang;
   qsSetLoading('Searching…');
   try {
     let results;
@@ -277,6 +280,7 @@ async function qsSearch() {
 async function qsSealedSearch() {
   const raw = (document.getElementById('f-quicksearch')?.value || '').trim();
   const { query, lang } = _parseQsInput(raw);
+  _qsLastLang = lang;
   qsSetLoading('Searching sealed products…');
   try {
     const p = new URLSearchParams({ action: 'sealed', language: lang });
@@ -308,7 +312,7 @@ function _qsRenderResults(results, lang, isSealed) {
   box.style.display = 'block';
   box.innerHTML = results.map((r, i) => {
     const thumb    = r.imageCdnUrl200 || r.imageCdnUrl400 || r.imageCdnUrl || '';
-    const priceUSD = isSealed ? r.unopenedPrice : (r.prices?.market ?? null);
+    const priceUSD = isSealed ? r.unopenedPrice : (r.prices?.market ?? r.japanesePrice ?? r.averagePrice ?? r.marketPrice ?? r.price ?? null);
     const priceTxt = priceUSD != null ? `SGD $${(priceUSD * USD_TO_SGD).toFixed(2)}` : '';
     const sub      = isSealed
       ? esc(r.setName || '—')
@@ -335,7 +339,7 @@ function _qsOpenPicker(results, isSealed) {
   document.getElementById('picker-overlay').classList.add('active');
   grid.innerHTML = results.map((r, i) => {
     const thumb    = r.imageCdnUrl200 || r.imageCdnUrl400 || r.imageCdnUrl || '';
-    const priceUSD = isSealed ? r.unopenedPrice : (r.prices?.market ?? null);
+    const priceUSD = isSealed ? r.unopenedPrice : (r.prices?.market ?? r.japanesePrice ?? r.averagePrice ?? r.marketPrice ?? r.price ?? null);
     const priceTxt = priceUSD != null ? `SGD $${(priceUSD * USD_TO_SGD).toFixed(2)}` : '—';
     const imgEl = thumb
       ? `<img src="${esc(thumb)}" alt="${esc(r.name)}" loading="lazy" style="width:100%;border-radius:6px;" />`
@@ -366,6 +370,9 @@ function _qsSelect(index, isSealed) {
 
 function _qsApply(r, isSealed) {
   if (!r) return;
+  _qsSelectedResult = r;  // store full result so addCard() can use the image URL
+  const isJP = _qsLastLang === 'japanese';
+
   if (isSealed) {
     document.getElementById('f-name').value  = r.name    || '';
     document.getElementById('f-set').value   = r.setName || '';
@@ -374,15 +381,20 @@ function _qsApply(r, isSealed) {
     const pi = document.getElementById('f-price');
     if (!pi.value && r.unopenedPrice != null) pi.value = (r.unopenedPrice * USD_TO_SGD).toFixed(2);
   } else {
-    document.getElementById('f-name').value = r.name    || '';
+    // append 🇯🇵 flag to name so price refresh later knows to query Japanese DB
+    const displayName = isJP ? (r.name || '') + ' 🇯🇵' : (r.name || '');
+    document.getElementById('f-name').value = displayName;
     document.getElementById('f-set').value  = r.setName || '';
     const rawType   = (r.pokemonType || '').toLowerCase();
-    const firstType = Array.isArray(r.energyType) ? (r.energyType[0]||'').toLowerCase() : rawType;
+    const firstType = Array.isArray(r.energyType) ? (r.energyType[0] || '').toLowerCase() : rawType;
     const mapped    = QS_TYPE_MAP[rawType] || QS_TYPE_MAP[firstType] || '';
     if (mapped) document.getElementById('f-type').value = mapped;
     const pi = document.getElementById('f-price');
-    if (!pi.value && r.prices?.market != null) pi.value = (r.prices.market * USD_TO_SGD).toFixed(2);
+    // Japanese cards may use different price fields — try all of them
+    const priceUSD = r.prices?.market ?? r.japanesePrice ?? r.averagePrice ?? r.marketPrice ?? r.price ?? null;
+    if (!pi.value && priceUSD != null) pi.value = (priceUSD * USD_TO_SGD).toFixed(2);
   }
+
   if (document.getElementById('f-quicksearch')) document.getElementById('f-quicksearch').value = '';
   document.getElementById('f-price').focus();
 }
@@ -404,6 +416,7 @@ function toggleForm() {
   const f = document.getElementById('add-form');
   f.classList.toggle('open');
   if (f.classList.contains('open')) {
+    _qsSelectedResult = null;  // clear any previous selection when form opens
     const qs = document.getElementById('f-quicksearch');
     if (qs) qs.focus(); else document.getElementById('f-name').focus();
   }
@@ -434,14 +447,18 @@ async function addCard() {
   if (!price || price <= 0) { toast('Please enter a valid purchase price.', 'error'); return; }
 
   const displayName = variant ? `${name} (${variant})` : name;
-   const id = crypto.randomUUID();
+  const id          = crypto.randomUUID();
+
+  // Pull image URL from the quick-search result if available
+  const r      = _qsSelectedResult;
+  const imgUrl = r ? (r.imageCdnUrl || r.imageCdnUrl400 || r.imageCdnUrl200 || null) : null;
 
   const { data, error } = await _sb.from('cards').insert([{
     id, user_id: _currentUserId, name: displayName, set_name: set||null,
     type: type||null, grade, quantity, purchase_price: price,
     purchase_date: purchaseDate||null, target_price: targetPrice,
     notes: notes||null, current_value: null, last_updated: null,
-    url: null, price_history: [], sold: false,
+    url: imgUrl, price_history: [], sold: false,
   }]).select().single();
 
   if (error) { toast('Failed to save card: ' + error.message, 'error'); return; }
@@ -449,6 +466,7 @@ async function addCard() {
   render();
   toggleForm();
   toast(displayName + ' added to your vault.', 'success');
+  _qsSelectedResult = null;
 
   ['f-name','f-set','f-variant','f-notes','f-quicksearch'].forEach(fid => {
     const el = document.getElementById(fid); if (el) el.value = '';
@@ -664,8 +682,8 @@ function exportCSV() {
                : c.currentValue!=null ? ((Number(c.currentValue)-Number(c.purchasePrice))*(c.quantity||1)).toFixed(2) : '';
     return [c.name,c.set||'',c.type||'',c.grade||'',c.quantity||1,cost.toFixed(2),
       val!==''?Number(val).toFixed(2):'',pl,c.purchaseDate||'',c.targetPrice||'',c.notes||'',
-      c.sold?'Sold':'Active',c.sold?(c.soldPrice||''):'',c.sold?(c.soldDate||''):'',c.sold?(c.soldTo||''):'']
-      .map(v => '"' + String(v).replace(/"/g,'""') + '"');
+      c.sold?'Sold':'Active',c.sold?(c.soldPrice||''):'',c.sold?(c.soldDate||''):'',c.sold?(c.soldTo||''):''
+    ].map(v => '"' + String(v).replace(/"/g,'""') + '"');
   });
   const csv  = [headers.map(h=>'"'+h+'"').join(','), ...rows.map(r=>r.join(','))].join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -681,9 +699,10 @@ function exportCSV() {
 //  PRICE API
 // ═══════════════════════════════════════════════════════════════════════════
 
-function sanitiseName(name) { return name.replace(/\s*\(.*$/, '').trim().replace(/['"]/g,'').trim(); }
+function sanitiseName(name) { return name.replace(/\s*\(.*$/, '').trim().replace(/['"🇯🇵]/g,'').trim(); }
 function sanitiseSet(set)   { return (set||'').replace(/['"]/g,'').trim(); }
 function extractVariant(name) { const m = name.match(/\(([^)]+)\)/); return m ? m[1].trim() : null; }
+function isJapaneseCard(card) { return card.name.includes('🇯🇵'); }
 
 function scorePokePriceResult(result, card) {
   const cardName = sanitiseName(card.name).toLowerCase();
@@ -711,8 +730,15 @@ function scorePokePriceResult(result, card) {
 }
 
 function extractPokePrice(result) {
-  if (result.prices?.market   != null) return result.prices.market;
-  if (result.prices?.lowPrice != null) return result.prices.lowPrice;
+  // English cards — TCGPlayer market price
+  if (result.prices?.market    != null) return result.prices.market;
+  if (result.prices?.lowPrice  != null) return result.prices.lowPrice;
+  if (result.prices?.midPrice  != null) return result.prices.midPrice;
+  // Japanese cards — different price fields
+  if (result.japanesePrice     != null) return result.japanesePrice;
+  if (result.averagePrice      != null) return result.averagePrice;
+  if (result.marketPrice       != null) return result.marketPrice;
+  if (result.price             != null) return result.price;
   return null;
 }
 
@@ -727,9 +753,10 @@ function applyGradeMultiplier(baseUSD, grade) {
 
 async function fetchPrice(card) {
   try {
-    const name = sanitiseName(card.name);
-    const set  = sanitiseSet(card.set);
-    const params = new URLSearchParams({ action: 'search', name });
+    const isJP   = isJapaneseCard(card);
+    const name   = sanitiseName(card.name);
+    const set    = sanitiseSet(card.set);
+    const params = new URLSearchParams({ action: 'search', name, language: isJP ? 'japanese' : 'english' });
     if (set) params.set('set', set);
     const res = await fetch('/api/pokeprice?' + params.toString());
     if (!res.ok) { console.warn('Price proxy returned', res.status, 'for', card.name); return null; }
@@ -814,20 +841,16 @@ function scoreImageResult(result, card) {
 
 async function fetchCardImageResults(card) {
   try {
-    const name = card.name.replace(/\s*\(.*?\)\s*/g, '').trim();
-    const params = new URLSearchParams({ action: 'search', name });
-    const r = await fetch('/api/pokeprice?' + params);
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({}));
-      console.error('fetchCardImageResults HTTP error:', r.status, err);
-      return [];
-    }
-    const data = await r.json();
-    return (data.results || []).filter(r => r.imageCdnUrl400 || r.imageCdnUrl || r.imageCdnUrl200);
-  } catch (e) {
-    console.error('fetchCardImageResults fetch error:', e);
-    return [];
-  }
+    const isJP   = isJapaneseCard(card);
+    const name   = sanitiseName(card.name);
+    const set    = sanitiseSet(card.set);
+    const params = new URLSearchParams({ action: 'search', name, language: isJP ? 'japanese' : 'english' });
+    if (set) params.set('set', set);
+    const res  = await fetch('/api/pokeprice?' + params.toString());
+    if (!res.ok) { console.warn('fetchCardImageResults returned', res.status, 'for', card.name); return []; }
+    const data = await res.json();
+    return (data.results||[]).filter(r => r.imageCdnUrl400||r.imageCdnUrl||r.imageCdnUrl200);
+  } catch (e) { console.warn('fetchCardImageResults error:', e); return []; }
 }
 
 function switchModalTab(tab) {
@@ -897,29 +920,47 @@ async function openCard(id) {
   else notesWrap.style.display = 'none';
 
   document.getElementById('modal-image-caption').textContent = card.name + (card.set?' — '+card.set:'');
+
+  // If card already has a saved image URL, use it immediately — no picker needed
+  if (card.url) {
+    _cardImageUrl    = card.url;
+    _cardImageLoaded = true;
+  }
+
   switchModalTab('info');
   document.getElementById('modal-overlay').classList.add('active');
 
-  fetchCardImageResults(card).then(async results => {
-    if (!results.length) { _cardImageUrl=null; _cardImageLoaded=true; }
-    else {
-      const scored      = results.map(r=>({...r,_score:scoreImageResult(r,card)})).sort((a,b)=>b._score-a._score);
-      const topScore    = scored[0]._score;
-      const runnerScore = scored[1]?._score ?? 0;
-      const autoSelect  = topScore>0 && (topScore-runnerScore)>=5;
-      let chosen = autoSelect ? scored[0] : (scored.length===1 ? scored[0] : null);
-      if (!chosen) {
-        _pendingImageResults=scored; _pendingImageCard=card;
-        const imagePanel = document.getElementById('modal-panel-image');
-        if (imagePanel?.style.display!=='none') _showImagePicker(scored, card);
-        return;
+  // Only fetch from API if we don't already have an image saved
+  if (!card.url) {
+    fetchCardImageResults(card).then(async results => {
+      if (!results.length) { _cardImageUrl=null; _cardImageLoaded=true; }
+      else {
+        const scored      = results.map(r=>({...r,_score:scoreImageResult(r,card)})).sort((a,b)=>b._score-a._score);
+        const topScore    = scored[0]._score;
+        const runnerScore = scored[1]?._score ?? 0;
+        const autoSelect  = topScore>0 && (topScore-runnerScore)>=5;
+        let chosen = autoSelect ? scored[0] : (scored.length===1 ? scored[0] : null);
+        if (!chosen) {
+          _pendingImageResults=scored; _pendingImageCard=card;
+          const imagePanel = document.getElementById('modal-panel-image');
+          if (imagePanel?.style.display!=='none') _showImagePicker(scored, card);
+          return;
+        }
+        _cardImageUrl    = chosen?.imageCdnUrl||chosen?.imageCdnUrl400||chosen?.imageCdnUrl200||null;
+        _cardImageLoaded = true;
+        // Save the found image URL back to the DB so we don't need to fetch again
+        if (_cardImageUrl) {
+          const idx = cards.findIndex(c => c.id === id);
+          if (idx > -1) {
+            cards[idx] = { ...cards[idx], url: _cardImageUrl };
+            await _sb.from('cards').update({ url: _cardImageUrl }).eq('id', id).eq('user_id', _currentUserId);
+          }
+        }
       }
-      _cardImageUrl    = chosen?.imageCdnUrl||chosen?.imageCdnUrl400||chosen?.imageCdnUrl200||null;
-      _cardImageLoaded = true;
-    }
-    const imagePanel = document.getElementById('modal-panel-image');
-    if (imagePanel?.style.display!=='none') _renderImageTab();
-  });
+      const imagePanel = document.getElementById('modal-panel-image');
+      if (imagePanel?.style.display!=='none') _renderImageTab();
+    });
+  }
 
   _renderPriceChart(card, colors);
 }
@@ -930,6 +971,14 @@ async function _showImagePicker(results, card) {
   const chosen     = await openCardPicker(withImages, card);
   _cardImageUrl    = chosen ? (chosen.imageCdnUrl||chosen.imageCdnUrl400||chosen.imageCdnUrl200||null) : null;
   _cardImageLoaded = true;
+  // Save picked image URL to DB
+  if (_cardImageUrl && card.id) {
+    const idx = cards.findIndex(c => c.id === card.id);
+    if (idx > -1) {
+      cards[idx] = { ...cards[idx], url: _cardImageUrl };
+      await _sb.from('cards').update({ url: _cardImageUrl }).eq('id', card.id).eq('user_id', _currentUserId);
+    }
+  }
   _renderImageTab();
 }
 
@@ -1123,7 +1172,7 @@ function render() {
         ? `<span class="type-badge" style="background:${colors.bg};color:${colors.border};border:1px solid ${colors.border};">${esc(c.type)}</span>`
         : '<span class="type-badge type-unknown">—</span>';
       const targetHit = c.targetPrice && c.currentValue!=null && Number(c.currentValue)>=Number(c.targetPrice);
-      const rowStyle  = `border-left:3px solid ${colors.border}${targetHit?';box-shadow:inset 0 0 0 1px rgba(76,175,125,0.2);':''};`;
+      const rowStyle  = `border-left:3px solid ${colors.border}${targetHit?';box-shadow:inset 0 0 0 1px rgba(76,175,125,0.2);':''}`;
       return `<tr class="card-row${targetHit?' target-hit':''}" onclick="openCard('${c.id}')" style="${rowStyle}">` +
         `<td title="${esc(c.name)}" style="font-weight:600;">${esc(c.name)}${targetHit?' <span style="color:var(--green);font-size:11px;">🎯</span>':''}</td>` +
         `<td title="${esc(c.set||'—')}" style="color:var(--text2);">${esc(c.set||'—')}</td>` +
