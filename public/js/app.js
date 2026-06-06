@@ -1,3 +1,4 @@
+cat > /tmp/app2_fixed.js << 'ENDOFFILE'
 /* ═══════════════════════════════════════════════════════════════════
    POKEVAULT — app.js  (Vercel + Supabase edition)
    ═══════════════════════════════════════════════════════════════════ */
@@ -52,6 +53,12 @@ let _pickerCallback      = null;
 let _pendingImageResults = [];
 let _pendingImageCard    = null;
 
+// Quick-search / add-card state
+let _qsDebounceTimer  = null;
+let _qsLastResults    = [];
+let _qsLastLang       = 'english';
+let _qsSelectedResult = null;   // full API result object chosen by user
+
 const TYPE_COLORS = {
   Fire:      { bg: 'rgba(255,100,50,0.12)',  border: '#ff6432', chart: '#ff6432' },
   Water:     { bg: 'rgba(74,144,217,0.12)',  border: '#4a90d9', chart: '#4a90d9' },
@@ -65,6 +72,13 @@ const TYPE_COLORS = {
   Fairy:     { bg: 'rgba(240,100,180,0.12)', border: '#f064b4', chart: '#f064b4' },
   Normal:    { bg: 'rgba(160,160,120,0.12)', border: '#a0a078', chart: '#a0a078' },
   Colorless: { bg: 'rgba(180,180,180,0.08)', border: '#b4b4b4', chart: '#b4b4b4' },
+};
+
+const QS_TYPE_MAP = {
+  fire:'Fire', water:'Water', grass:'Grass', lightning:'Electric', electric:'Electric',
+  psychic:'Psychic', fighting:'Fighting', darkness:'Dark', dark:'Dark',
+  metal:'Steel', steel:'Steel', dragon:'Dragon', fairy:'Fairy',
+  normal:'Normal', colorless:'Colorless',
 };
 
 function getTypeColor(type) {
@@ -199,25 +213,42 @@ function confirmDialog(message) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  QUICK SEARCH (add form)
-//  "charizard"       → english card search
-//  "charizard JP"    → japanese card search
-//  "199/165"         → number lookup, shows picker if multiple results
-//  "199/165 JP"      → japanese number lookup
-//  📦 Sealed button  → sealed product search
+//  ADD CARD MODAL
 // ═══════════════════════════════════════════════════════════════════════════
 
-let _qsDebounceTimer  = null;
-let _qsLastResults    = [];
-let _qsLastLang       = 'english';  // tracks language of last search
-let _qsSelectedResult = null;       // stores full API result chosen from dropdown
+function openAddModal() {
+  _qsSelectedResult = null;
+  _qsLastLang = 'english';
+  // clear form
+  ['f-name','f-set','f-variant','f-notes','f-quicksearch'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  document.getElementById('f-price').value         = '';
+  document.getElementById('f-target').value        = '';
+  document.getElementById('f-quantity').value      = '1';
+  document.getElementById('f-purchase-date').value = '';
+  document.getElementById('f-type').value          = '';
+  document.getElementById('f-grade').value         = 'raw';
+  // hide preview
+  document.getElementById('qs-selected-preview').style.display = 'none';
+  qsHide();
+  document.getElementById('add-overlay').classList.add('active');
+  setTimeout(() => document.getElementById('f-quicksearch')?.focus(), 100);
+}
 
-const QS_TYPE_MAP = {
-  fire:'Fire', water:'Water', grass:'Grass', lightning:'Electric', electric:'Electric',
-  psychic:'Psychic', fighting:'Fighting', darkness:'Dark', dark:'Dark',
-  metal:'Steel', steel:'Steel', dragon:'Dragon', fairy:'Fairy',
-  normal:'Normal', colorless:'Colorless',
-};
+function closeAddModal() {
+  document.getElementById('add-overlay').classList.remove('active');
+  qsHide();
+  _qsSelectedResult = null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  QUICK SEARCH
+//  Type "charizard"     → English cards
+//  Type "charizard JP"  → Japanese cards
+//  Type "199/165"       → number lookup
+//  Type "199/165 JP"    → Japanese number lookup
+// ═══════════════════════════════════════════════════════════════════════════
 
 function _isCardNumber(q) {
   return /^\d+\/\d+$/.test(q.trim()) || /^\d{3}$/.test(q.trim());
@@ -236,6 +267,7 @@ function qsDebounce() {
 
 function qsSetLoading(text) {
   const box = document.getElementById('qs-results');
+  if (!box) return;
   box.style.display = 'block';
   box.innerHTML = `<div style="padding:18px;text-align:center;color:var(--text3);font-size:13px;font-family:var(--font-mono);">${text}</div>`;
 }
@@ -295,8 +327,24 @@ async function qsSealedSearch() {
   }
 }
 
+// Pull price from a result object — handles both English (TCGPlayer) and Japanese price fields
+function _extractResultPrice(r, isSealed) {
+  if (isSealed) return r.unopenedPrice ?? null;
+  // English
+  if (r.prices?.market    != null) return r.prices.market;
+  if (r.prices?.lowPrice  != null) return r.prices.lowPrice;
+  if (r.prices?.midPrice  != null) return r.prices.midPrice;
+  // Japanese — pokemonpricetracker returns these for JP cards
+  if (r.japanesePrice     != null) return r.japanesePrice;
+  if (r.averagePrice      != null) return r.averagePrice;
+  if (r.marketPrice       != null) return r.marketPrice;
+  if (r.price             != null) return r.price;
+  return null;
+}
+
 function _qsRenderResults(results, lang, isSealed) {
   const box = document.getElementById('qs-results');
+  if (!box) return;
   if (!results.length) {
     box.style.display = 'block';
     box.innerHTML = `<div style="padding:18px;text-align:center;color:var(--text3);font-size:13px;font-family:var(--font-mono);">No results found</div>`;
@@ -312,7 +360,7 @@ function _qsRenderResults(results, lang, isSealed) {
   box.style.display = 'block';
   box.innerHTML = results.map((r, i) => {
     const thumb    = r.imageCdnUrl200 || r.imageCdnUrl400 || r.imageCdnUrl || '';
-    const priceUSD = isSealed ? r.unopenedPrice : (r.prices?.market ?? r.japanesePrice ?? r.averagePrice ?? r.marketPrice ?? r.price ?? null);
+    const priceUSD = _extractResultPrice(r, isSealed);
     const priceTxt = priceUSD != null ? `SGD $${(priceUSD * USD_TO_SGD).toFixed(2)}` : '';
     const sub      = isSealed
       ? esc(r.setName || '—')
@@ -339,7 +387,7 @@ function _qsOpenPicker(results, isSealed) {
   document.getElementById('picker-overlay').classList.add('active');
   grid.innerHTML = results.map((r, i) => {
     const thumb    = r.imageCdnUrl200 || r.imageCdnUrl400 || r.imageCdnUrl || '';
-    const priceUSD = isSealed ? r.unopenedPrice : (r.prices?.market ?? r.japanesePrice ?? r.averagePrice ?? r.marketPrice ?? r.price ?? null);
+    const priceUSD = _extractResultPrice(r, isSealed);
     const priceTxt = priceUSD != null ? `SGD $${(priceUSD * USD_TO_SGD).toFixed(2)}` : '—';
     const imgEl = thumb
       ? `<img src="${esc(thumb)}" alt="${esc(r.name)}" loading="lazy" style="width:100%;border-radius:6px;" />`
@@ -368,9 +416,10 @@ function _qsSelect(index, isSealed) {
   _qsApply(_qsLastResults[index], isSealed);
 }
 
+// Called when user picks a card from search results — fills the form AND shows preview
 function _qsApply(r, isSealed) {
   if (!r) return;
-  _qsSelectedResult = r;  // store full result so addCard() can use the image URL
+  _qsSelectedResult = r;
   const isJP = _qsLastLang === 'japanese';
 
   if (isSealed) {
@@ -378,10 +427,11 @@ function _qsApply(r, isSealed) {
     document.getElementById('f-set').value   = r.setName || '';
     document.getElementById('f-type').value  = '';
     document.getElementById('f-grade').value = 'raw';
+    const priceUSD = _extractResultPrice(r, true);
     const pi = document.getElementById('f-price');
-    if (!pi.value && r.unopenedPrice != null) pi.value = (r.unopenedPrice * USD_TO_SGD).toFixed(2);
+    if (!pi.value && priceUSD != null) pi.value = (priceUSD * USD_TO_SGD).toFixed(2);
   } else {
-    // append 🇯🇵 flag to name so price refresh later knows to query Japanese DB
+    // Append 🇯🇵 so price refresh later queries the right DB
     const displayName = isJP ? (r.name || '') + ' 🇯🇵' : (r.name || '');
     document.getElementById('f-name').value = displayName;
     document.getElementById('f-set').value  = r.setName || '';
@@ -389,19 +439,38 @@ function _qsApply(r, isSealed) {
     const firstType = Array.isArray(r.energyType) ? (r.energyType[0] || '').toLowerCase() : rawType;
     const mapped    = QS_TYPE_MAP[rawType] || QS_TYPE_MAP[firstType] || '';
     if (mapped) document.getElementById('f-type').value = mapped;
+    const priceUSD = _extractResultPrice(r, false);
     const pi = document.getElementById('f-price');
-    // Japanese cards may use different price fields — try all of them
-    const priceUSD = r.prices?.market ?? r.japanesePrice ?? r.averagePrice ?? r.marketPrice ?? r.price ?? null;
     if (!pi.value && priceUSD != null) pi.value = (priceUSD * USD_TO_SGD).toFixed(2);
   }
 
+  // Show the preview card strip
+  const thumb = r.imageCdnUrl200 || r.imageCdnUrl400 || r.imageCdnUrl || '';
+  const preview = document.getElementById('qs-selected-preview');
+  const previewImg = document.getElementById('qs-preview-img');
+  const previewName = document.getElementById('qs-preview-name');
+  const previewSub  = document.getElementById('qs-preview-sub');
+  if (preview) {
+    preview.style.display = 'flex';
+    if (previewImg) { previewImg.src = thumb; previewImg.style.display = thumb ? 'block' : 'none'; }
+    if (previewName) previewName.textContent = r.name || '';
+    if (previewSub) previewSub.textContent = [r.setName, r.cardNumber ? '#'+r.cardNumber : '', isJP ? '🇯🇵 Japanese' : ''].filter(Boolean).join(' · ');
+  }
+
   if (document.getElementById('f-quicksearch')) document.getElementById('f-quicksearch').value = '';
+  qsHide();
   document.getElementById('f-price').focus();
 }
 
-document.addEventListener('click', e => {
-  if (!e.target.closest('#add-form')) qsHide();
-});
+function clearQsSelection() {
+  _qsSelectedResult = null;
+  document.getElementById('qs-selected-preview').style.display = 'none';
+  ['f-name','f-set','f-type','f-price'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  document.getElementById('f-grade').value = 'raw';
+  document.getElementById('f-quicksearch')?.focus();
+}
 
 // ── Tab navigation ────────────────────────────────────────────────────────
 function switchTab(tab) {
@@ -410,16 +479,6 @@ function switchTab(tab) {
   document.getElementById('tab-sold').classList.toggle('active',   tab === 'sold');
   document.getElementById('panel-active').style.display = tab === 'active' ? 'block' : 'none';
   document.getElementById('panel-sold').style.display   = tab === 'sold'   ? 'block' : 'none';
-}
-
-function toggleForm() {
-  const f = document.getElementById('add-form');
-  f.classList.toggle('open');
-  if (f.classList.contains('open')) {
-    _qsSelectedResult = null;  // clear any previous selection when form opens
-    const qs = document.getElementById('f-quicksearch');
-    if (qs) qs.focus(); else document.getElementById('f-name').focus();
-  }
 }
 
 function populateSetFilter() {
@@ -449,7 +508,7 @@ async function addCard() {
   const displayName = variant ? `${name} (${variant})` : name;
   const id          = crypto.randomUUID();
 
-  // Pull image URL from the quick-search result if available
+  // Use image URL from the selected search result
   const r      = _qsSelectedResult;
   const imgUrl = r ? (r.imageCdnUrl || r.imageCdnUrl400 || r.imageCdnUrl200 || null) : null;
 
@@ -464,19 +523,8 @@ async function addCard() {
   if (error) { toast('Failed to save card: ' + error.message, 'error'); return; }
   cards.push(dbToClient(data));
   render();
-  toggleForm();
+  closeAddModal();
   toast(displayName + ' added to your vault.', 'success');
-  _qsSelectedResult = null;
-
-  ['f-name','f-set','f-variant','f-notes','f-quicksearch'].forEach(fid => {
-    const el = document.getElementById(fid); if (el) el.value = '';
-  });
-  document.getElementById('f-price').value         = '';
-  document.getElementById('f-target').value        = '';
-  document.getElementById('f-quantity').value      = '1';
-  document.getElementById('f-purchase-date').value = '';
-  document.getElementById('f-type').value          = '';
-  document.getElementById('f-grade').value         = 'raw';
 }
 
 // ── Delete card ───────────────────────────────────────────────────────────
@@ -699,6 +747,7 @@ function exportCSV() {
 //  PRICE API
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Strip emoji and brackets from name for API queries
 function sanitiseName(name) { return name.replace(/\s*\(.*$/, '').trim().replace(/['"🇯🇵]/g,'').trim(); }
 function sanitiseSet(set)   { return (set||'').replace(/['"]/g,'').trim(); }
 function extractVariant(name) { const m = name.match(/\(([^)]+)\)/); return m ? m[1].trim() : null; }
@@ -729,12 +778,11 @@ function scorePokePriceResult(result, card) {
   return score;
 }
 
+// Extract price from a stored result — handles both English (TCGPlayer) and Japanese price fields
 function extractPokePrice(result) {
-  // English cards — TCGPlayer market price
   if (result.prices?.market    != null) return result.prices.market;
   if (result.prices?.lowPrice  != null) return result.prices.lowPrice;
   if (result.prices?.midPrice  != null) return result.prices.midPrice;
-  // Japanese cards — different price fields
   if (result.japanesePrice     != null) return result.japanesePrice;
   if (result.averagePrice      != null) return result.averagePrice;
   if (result.marketPrice       != null) return result.marketPrice;
@@ -847,7 +895,7 @@ async function fetchCardImageResults(card) {
     const params = new URLSearchParams({ action: 'search', name, language: isJP ? 'japanese' : 'english' });
     if (set) params.set('set', set);
     const res  = await fetch('/api/pokeprice?' + params.toString());
-    if (!res.ok) { console.warn('fetchCardImageResults returned', res.status, 'for', card.name); return []; }
+    if (!res.ok) return [];
     const data = await res.json();
     return (data.results||[]).filter(r => r.imageCdnUrl400||r.imageCdnUrl||r.imageCdnUrl200);
   } catch (e) { console.warn('fetchCardImageResults error:', e); return []; }
@@ -921,7 +969,7 @@ async function openCard(id) {
 
   document.getElementById('modal-image-caption').textContent = card.name + (card.set?' — '+card.set:'');
 
-  // If card already has a saved image URL, use it immediately — no picker needed
+  // If already have a saved image, use it straight away
   if (card.url) {
     _cardImageUrl    = card.url;
     _cardImageLoaded = true;
@@ -930,7 +978,7 @@ async function openCard(id) {
   switchModalTab('info');
   document.getElementById('modal-overlay').classList.add('active');
 
-  // Only fetch from API if we don't already have an image saved
+  // Only hit the API if no image is saved yet
   if (!card.url) {
     fetchCardImageResults(card).then(async results => {
       if (!results.length) { _cardImageUrl=null; _cardImageLoaded=true; }
@@ -946,9 +994,9 @@ async function openCard(id) {
           if (imagePanel?.style.display!=='none') _showImagePicker(scored, card);
           return;
         }
-        _cardImageUrl    = chosen?.imageCdnUrl||chosen?.imageCdnUrl400||chosen?.imageCdnUrl200||null;
+        _cardImageUrl    = chosen.imageCdnUrl||chosen.imageCdnUrl400||chosen.imageCdnUrl200||null;
         _cardImageLoaded = true;
-        // Save the found image URL back to the DB so we don't need to fetch again
+        // Save back to DB so we don't fetch again next time
         if (_cardImageUrl) {
           const idx = cards.findIndex(c => c.id === id);
           if (idx > -1) {
@@ -971,7 +1019,6 @@ async function _showImagePicker(results, card) {
   const chosen     = await openCardPicker(withImages, card);
   _cardImageUrl    = chosen ? (chosen.imageCdnUrl||chosen.imageCdnUrl400||chosen.imageCdnUrl200||null) : null;
   _cardImageLoaded = true;
-  // Save picked image URL to DB
   if (_cardImageUrl && card.id) {
     const idx = cards.findIndex(c => c.id === card.id);
     if (idx > -1) {
@@ -1076,7 +1123,7 @@ function _destroyModal() {
 
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
-  ['modal-overlay','confirm-overlay','edit-overlay','sell-overlay','manual-price-overlay','picker-overlay']
+  ['modal-overlay','confirm-overlay','edit-overlay','sell-overlay','manual-price-overlay','picker-overlay','add-overlay']
     .forEach(id => document.getElementById(id)?.classList.remove('active'));
   if (priceChart) { priceChart.destroy(); priceChart=null; }
 });
@@ -1258,3 +1305,4 @@ function render() {
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────
 init();
+ENDOFFILE
