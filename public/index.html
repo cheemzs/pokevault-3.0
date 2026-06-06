@@ -1,3 +1,4 @@
+cat > /tmp/index_fixed.html << 'ENDOFHTML'
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
@@ -102,6 +103,125 @@
     </div>
   </div>
 
+  <!-- ── Add card modal ─────────────────────────────────────────── -->
+  <div class="modal-overlay" id="add-overlay">
+    <div class="modal" style="max-width:680px;">
+      <button class="modal-close" onclick="closeAddModal()">✕</button>
+      <h2 style="font-size:16px; font-weight:600; margin-bottom:20px; letter-spacing:0.05em; text-transform:uppercase;">Add card to vault</h2>
+
+      <!-- Step 1: Search -->
+      <div id="add-step-search">
+        <p style="font-size:12px;color:var(--text3);font-family:var(--font-mono);margin-bottom:14px;">Search for your card — click a result to select it, then fill in the details below.</p>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+          <div style="flex:1;position:relative;">
+            <input type="text" id="f-quicksearch"
+              placeholder="Card name, number (199/165), or add JP for Japanese…"
+              style="width:100%;box-sizing:border-box;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:10px 14px;color:var(--text);font-family:var(--font-mono);font-size:13px;outline:none;"
+              oninput="qsDebounce()" onkeydown="if(event.key==='Enter'){event.preventDefault();qsSearch();}"
+              autocomplete="off" />
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button onclick="qsSearch()"
+              style="background:var(--accent);color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;">
+              Search
+            </button>
+            <button onclick="qsSealedSearch()"
+              style="background:var(--bg3);color:var(--text2);border:1px solid var(--border2);border-radius:8px;padding:10px 14px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;" title="Search sealed products">
+              📦 Sealed
+            </button>
+          </div>
+        </div>
+        <div id="qs-results" style="display:none;background:var(--bg3);border:1px solid var(--border2);border-radius:10px;max-height:260px;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.35);margin-bottom:8px;"></div>
+
+        <!-- Selected card preview (shown after picking a result) -->
+        <div id="qs-selected-preview" style="display:none;background:var(--bg3);border:1px solid var(--accent);border-radius:10px;padding:12px 16px;margin-top:8px;display:flex;align-items:center;gap:14px;">
+          <img id="qs-preview-img" style="width:44px;height:62px;object-fit:contain;border-radius:4px;flex-shrink:0;" alt="" />
+          <div style="flex:1;min-width:0;">
+            <div id="qs-preview-name" style="font-weight:600;font-size:13px;color:var(--text);"></div>
+            <div id="qs-preview-sub" style="font-size:11px;color:var(--text3);font-family:var(--font-mono);margin-top:3px;"></div>
+          </div>
+          <button onclick="clearQsSelection()" style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:4px;" title="Clear selection">✕</button>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:12px;margin:18px 0;color:var(--text3);font-size:11px;font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;">
+        <span style="flex:1;height:1px;background:var(--border);display:block;"></span>
+        Details
+        <span style="flex:1;height:1px;background:var(--border);display:block;"></span>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Card name</label>
+          <input type="text" id="f-name" placeholder="e.g. Mew ex" />
+        </div>
+        <div class="form-group">
+          <label>Set</label>
+          <input type="text" id="f-set" placeholder="e.g. Paldean Fates" />
+        </div>
+        <div class="form-group">
+          <label>Variant / Promo <span style="color:var(--text3); font-weight:400;">(optional)</span></label>
+          <input type="text" id="f-variant" placeholder="e.g. Pokemon Center, 086/197" />
+        </div>
+        <div class="form-group">
+          <label>Type</label>
+          <select id="f-type">
+            <option value="">Unknown</option>
+            <option value="Fire">🔥 Fire</option>
+            <option value="Water">💧 Water</option>
+            <option value="Grass">🌿 Grass</option>
+            <option value="Electric">⚡ Electric</option>
+            <option value="Psychic">🔮 Psychic</option>
+            <option value="Fighting">🥊 Fighting</option>
+            <option value="Dark">🌑 Dark</option>
+            <option value="Steel">⚙️ Steel</option>
+            <option value="Dragon">🐉 Dragon</option>
+            <option value="Fairy">✨ Fairy</option>
+            <option value="Normal">⭐ Normal</option>
+            <option value="Colorless">🌀 Colorless</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Grade</label>
+          <select id="f-grade">
+            <option value="raw">Raw</option>
+            <option value="PSA 10">PSA 10</option>
+            <option value="PSA 9">PSA 9</option>
+            <option value="PSA 8">PSA 8</option>
+            <option value="PSA 7">PSA 7</option>
+            <option value="BGS 10">BGS 10</option>
+            <option value="BGS 9.5">BGS 9.5</option>
+            <option value="BGS 9">BGS 9</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Quantity</label>
+          <input type="number" id="f-quantity" placeholder="1" min="1" step="1" value="1" />
+        </div>
+        <div class="form-group">
+          <label>Purchase price (SGD)</label>
+          <input type="number" id="f-price" placeholder="0.00" step="0.01" min="0" />
+        </div>
+        <div class="form-group">
+          <label>Purchase date</label>
+          <input type="date" id="f-purchase-date" />
+        </div>
+        <div class="form-group">
+          <label>Target sell price (SGD)</label>
+          <input type="number" id="f-target" placeholder="0.00" step="0.01" min="0" />
+        </div>
+        <div class="form-group full">
+          <label>Notes</label>
+          <input type="text" id="f-notes" placeholder="Condition notes, where bought, etc." />
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn-cancel"  onclick="closeAddModal()">Cancel</button>
+        <button class="btn-primary" onclick="addCard()">Add to vault</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Card picker modal ──────────────────────────────────────── -->
   <div class="modal-overlay" id="picker-overlay">
     <div class="modal picker-modal">
@@ -179,8 +299,8 @@
           <input type="text" id="edit-notes" placeholder="Condition notes, where bought, etc." />
         </div>
         <div class="form-group full">
-          <label>PriceCharting URL <span style="color:var(--text3); font-weight:400;">(optional)</span></label>
-          <input type="text" id="edit-url" placeholder="Leave blank — prices auto-fetched by name" />
+          <label>Image URL <span style="color:var(--text3); font-weight:400;">(optional)</span></label>
+          <input type="text" id="edit-url" placeholder="Leave blank — fetched automatically" />
         </div>
       </div>
       <div class="form-actions">
@@ -386,111 +506,7 @@
           <button class="btn-refresh" onclick="refreshPrices()">↻ Refresh prices</button>
           <button class="btn-export"  onclick="exportCSV()" title="Export to CSV">↓ Export</button>
           <button class="btn-reset"   onclick="resetVault()" title="Delete all cards">⚠ Reset</button>
-          <button class="btn-add"     onclick="toggleForm()">+ Add card</button>
-        </div>
-      </div>
-
-      <!-- Add card form -->
-  <div class="form-title">Add new card</div>
-
-        <!-- Quick search -->
-        <div style="margin-bottom:18px;">
-          <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
-            <div style="flex:1;position:relative;">
-              <input type="text" id="f-quicksearch"
-                placeholder="Search card name, number (199/165), or add JP for Japanese…"
-                style="width:100%;box-sizing:border-box;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:10px 14px;color:var(--text);font-family:var(--font-mono);font-size:13px;outline:none;"
-                oninput="qsDebounce()" onkeydown="if(event.key==='Enter'){event.preventDefault();qsSearch();}"
-                autocomplete="off" />
-            </div>
-            <div style="display:flex;gap:6px;">
-              <button onclick="qsSearch()" id="qs-btn"
-                style="background:var(--accent);color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;">
-                Search
-              </button>
-              <button onclick="qsSealedSearch()" id="qs-sealed-btn"
-                style="background:var(--bg3);color:var(--text2);border:1px solid var(--border2);border-radius:8px;padding:10px 14px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;" title="Search sealed products">
-                📦 Sealed
-              </button>
-            </div>
-          </div>
-          <div id="qs-results" style="display:none;background:var(--bg3);border:1px solid var(--border2);border-radius:10px;max-height:320px;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.35);"></div>
-        </div>
-
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;color:var(--text3);font-size:11px;font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.08em;">
-          <span style="flex:1;height:1px;background:var(--border);display:block;"></span>
-          Card details
-          <span style="flex:1;height:1px;background:var(--border);display:block;"></span>
-        </div>
-
-        <div class="form-grid">
-          <div class="form-group">
-            <label>Card name</label>
-            <input type="text" id="f-name" placeholder="e.g. Mew ex" />
-          </div>
-          <div class="form-group">
-            <label>Set</label>
-            <input type="text" id="f-set" placeholder="e.g. Paldean Fates" />
-          </div>
-          <div class="form-group">
-            <label>Variant / Promo <span style="color:var(--text3); font-weight:400;">(optional)</span></label>
-            <input type="text" id="f-variant" placeholder="e.g. Pokemon Center, 086/197" />
-          </div>
-          <div class="form-group">
-            <label>Type</label>
-            <select id="f-type">
-              <option value="">Unknown</option>
-              <option value="Fire">🔥 Fire</option>
-              <option value="Water">💧 Water</option>
-              <option value="Grass">🌿 Grass</option>
-              <option value="Electric">⚡ Electric</option>
-              <option value="Psychic">🔮 Psychic</option>
-              <option value="Fighting">🥊 Fighting</option>
-              <option value="Dark">🌑 Dark</option>
-              <option value="Steel">⚙️ Steel</option>
-              <option value="Dragon">🐉 Dragon</option>
-              <option value="Fairy">✨ Fairy</option>
-              <option value="Normal">⭐ Normal</option>
-              <option value="Colorless">🌀 Colorless</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>Grade</label>
-            <select id="f-grade">
-              <option value="raw">Raw</option>
-              <option value="PSA 10">PSA 10</option>
-              <option value="PSA 9">PSA 9</option>
-              <option value="PSA 8">PSA 8</option>
-              <option value="PSA 7">PSA 7</option>
-              <option value="BGS 10">BGS 10</option>
-              <option value="BGS 9.5">BGS 9.5</option>
-              <option value="BGS 9">BGS 9</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>Quantity</label>
-            <input type="number" id="f-quantity" placeholder="1" min="1" step="1" value="1" />
-          </div>
-          <div class="form-group">
-            <label>Purchase price (SGD)</label>
-            <input type="number" id="f-price" placeholder="0.00" step="0.01" min="0" />
-          </div>
-          <div class="form-group">
-            <label>Purchase date</label>
-            <input type="date" id="f-purchase-date" />
-          </div>
-          <div class="form-group">
-            <label>Target sell price (SGD)</label>
-            <input type="number" id="f-target" placeholder="0.00" step="0.01" min="0" />
-          </div>
-          <div class="form-group full">
-            <label>Notes</label>
-            <input type="text" id="f-notes" placeholder="Condition notes, where bought, etc." />
-          </div>
-        </div>
-        <div class="form-actions">
-          <button class="btn-cancel"  onclick="toggleForm()">Cancel</button>
-          <button class="btn-primary" onclick="addCard()">Add to vault</button>
+          <button class="btn-add"     onclick="openAddModal()">+ Add card</button>
         </div>
       </div>
 
@@ -574,3 +590,4 @@
   <script src="/js/app.js"></script>
 </body>
 </html>
+ENDOFHTML
